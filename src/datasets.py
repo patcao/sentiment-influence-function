@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-
+import math
 
 class DatasetType(Enum):
     TRAIN = 1
@@ -13,11 +13,11 @@ class DatasetType(Enum):
 
 
 class SST2Dataset(Dataset):
-    def __init__(self, dataset_type: DatasetType, tokenizer, max_seq_len: int = 64):
-        home = Path(
-            "/content/gdrive/MyDrive/Columbia/RobustStatistics/sentiment-influence-function/"
-        )
-        data_path = home / "data"
+    def __init__(self, dataset_type: DatasetType, tokenizer, max_seq_len: int = 64, frac=1):
+        # home = Path(
+        #     "/content/gdrive/MyDrive/Columbia/RobustStatistics/sentiment-influence-function/"
+        # )
+        data_path = Path("data")
 
         self.max_seq_len = max_seq_len
         self.tokenizer = tokenizer
@@ -28,6 +28,9 @@ class SST2Dataset(Dataset):
             df = pd.read_csv(data_path / "train.csv")
         elif dataset_type == DatasetType.VAL:
             df = pd.read_csv(data_path / "val.csv")
+        
+        keep_len = math.floor(frac * len(df))
+        df = df.iloc[:keep_len]
 
         x_features = df.sentence
         labels = df.label

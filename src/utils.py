@@ -9,6 +9,7 @@ import torch
 from sklearn.metrics import accuracy_score, auc, roc_curve
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from tqdm import tqdm
+import time
 
 
 def set_seed(seed_value=42):
@@ -65,9 +66,10 @@ def get_auc_CV(model, X_train_tfidf, y_train):
     return auc.mean()
 
 
-def train(model, train_dataloader, val_dataloader=None, epochs=4, evaluation=False):
+def train(model, optimizer, scheduler, train_dataloader, val_dataloader=None, epochs=4, evaluation=False):
     """Train the BertClassifier model."""
     device = get_device()
+    loss_fn = torch.nn.CrossEntropyLoss()
 
     # Start training loop
     for epoch_i in range(epochs):
