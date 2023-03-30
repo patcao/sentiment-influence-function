@@ -38,6 +38,7 @@ class SST2Dataset(Dataset):
             x_features, max_seq_len, truncation=True
         )
 
+        self.df = df
         self.inputs = torch.Tensor(inputs)
         self.masks = torch.Tensor(masks)
         self.labels = torch.LongTensor(labels)
