@@ -88,6 +88,4 @@ def get_inverse_hvp_lissa(
 
 def compute_influence(model: nn.Module, train_dataloader, test_dataloader):
 
-
-    
     pass

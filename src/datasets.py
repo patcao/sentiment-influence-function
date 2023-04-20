@@ -1,10 +1,11 @@
+import math
 from enum import Enum
 from pathlib import Path
 
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-import math
+
 
 class DatasetType(Enum):
     TRAIN = 1
@@ -13,7 +14,14 @@ class DatasetType(Enum):
 
 
 class SST2Dataset(Dataset):
-    def __init__(self, dataset_type: DatasetType, tokenizer, max_seq_len: int = 64, frac=1):
+    def __init__(
+        self,
+        dataset_type: DatasetType,
+        tokenizer,
+        max_seq_len: int = 64,
+        frac: float = 1,
+        leave_out_guid: int = None,
+    ):
         # home = Path(
         #     "/content/gdrive/MyDrive/Columbia/RobustStatistics/sentiment-influence-function/"
         # )
@@ -25,10 +33,16 @@ class SST2Dataset(Dataset):
         if dataset_type == DatasetType.TRAIN:
             df = pd.read_csv(data_path / "train.csv")
         elif dataset_type == DatasetType.TEST:
-            df = pd.read_csv(data_path / "train.csv")
+            df = pd.read_csv(data_path / "test.csv")
         elif dataset_type == DatasetType.VAL:
             df = pd.read_csv(data_path / "val.csv")
-        
+
+        if leave_out_guid is not None:
+            # Keep everything except the leave out guid data point
+            df = df[df.guid != leave_out_guid]
+            df = df.reset_index(drop=True)
+
+        # Keep only a fraction of the data
         keep_len = math.floor(frac * len(df))
         df = df.iloc[:keep_len]
 
@@ -75,7 +89,8 @@ class SST2Dataset(Dataset):
                 text=sent,  # Preprocess sentence
                 add_special_tokens=True,  # Add `[CLS]` and `[SEP]`
                 max_length=max_length,  # Max length to truncate/pad
-                pad_to_max_length=True,  # Pad sentence to max length
+                padding="max_length",
+                # pad_to_max_length=True,  # Pad sentence to max length
                 # return_tensors='pt',           # Return PyTorch tensor
                 return_attention_mask=True,  # Return attention mask
                 **kwargs
