@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-from transformers import BertTokenizer
+from transformers import AutoTokenizer
 from tqdm import tqdm
 
 
@@ -23,6 +23,7 @@ class SST2Dataset(Dataset):
     def create_dataset(
         cls,
         name: str,
+        device,
         df: pd.DataFrame,
         tokenizer=None,
         max_seq_len: int = 64,
@@ -33,15 +34,19 @@ class SST2Dataset(Dataset):
         df = df.iloc[:keep_len]
 
         if tokenizer is None:
-            tokenizer = BertTokenizer.from_pretrained(
-                "bert-base-uncased", do_lower_case=True
+            # tokenizer = BertTokenizer.from_pretrained(
+            #     "bert-base-uncased", do_lower_case=True
+            # )
+            tokenizer = AutoTokenizer.from_pretrained(
+                "distilbert-base-uncased", do_lower_case=True
             )
 
         inputs, masks = cls._preprocessing_for_bert(
             df.sentence, max_seq_len, tokenizer, truncation=True
         )
-        guids = torch.Tensor(df.guid)
-        labels = torch.LongTensor(df.label)
+        guids = torch.Tensor(df.guid).to(device)
+        labels = torch.LongTensor(df.label).to(device)
+        inputs, masks = inputs.to(device), masks.to(device)
 
         return SST2Dataset(max_seq_len, tokenizer, df, guids, inputs, masks, labels)
 

@@ -88,7 +88,8 @@ def evaluate(model, val_dataloader):
         # Compute logits
         with torch.no_grad():
             logits = model(b_input_ids, b_attn_mask)
-
+        if hasattr(logits, "logits"):
+            logits = logits.logits
         # Compute loss
         loss = loss_fn(logits, b_labels)
         val_loss.append(loss.item())
@@ -115,10 +116,15 @@ def train(
     val_dataloader=None,
     epochs=4,
     evaluation=False,
+    print_epoch_pct=0.2,
 ):
     """Train the BertClassifier model."""
     device = get_device()
     loss_fn = torch.nn.CrossEntropyLoss()
+
+    total_steps = len(train_dataloader) * epochs
+    print_steps = print_epoch_pct * total_steps
+    history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
 
     # Start training loop
     for epoch_i in range(epochs):
@@ -135,7 +141,7 @@ def train(
         t0_epoch, t0_batch = time.time(), time.time()
 
         # Reset tracking variables at the beginning of each epoch
-        total_loss, batch_loss, batch_counts = 0, 0, 0
+        total_acc, total_loss, batch_loss, batch_counts = 0, 0, 0, 0
 
         # Put the model into the training mode
         model.train()
@@ -145,7 +151,6 @@ def train(
 
         with tqdm(train_dataloader, unit="batch") as tepoch:
             for step, batch in enumerate(tepoch):
-
                 batch_counts += 1
                 # Load batch to GPU
                 b_input_ids, b_attn_mask, b_labels = tuple(t.to(device) for t in batch)
@@ -155,11 +160,18 @@ def train(
 
                 # Perform a forward pass. This will return logits.
                 logits = model(b_input_ids, b_attn_mask)
+                if hasattr(logits, "logits"):
+                    logits = logits.logits
 
                 # Compute loss and accumulate the loss values
                 loss = loss_fn(logits, b_labels)
                 batch_loss += loss.item()
                 total_loss += loss.item()
+
+                # Get the predictions
+                preds = torch.argmax(logits, dim=1).flatten()
+                accuracy = (preds == b_labels).cpu().numpy().mean() * 100
+                total_acc += accuracy
 
                 # Perform a backward pass to calculate gradients
                 loss.backward()
@@ -171,8 +183,8 @@ def train(
                 optimizer.step()
                 scheduler.step()
 
-                # Print the loss values and time elapsed for every 20 batches
-                if (step % 20 == 0 and step != 0) or (
+                # Print the loss values and time elapsed for every print_steps
+                if (step % print_steps == 0 and step != 0) or (
                     step == len(train_dataloader) - 1
                 ):
                     # Calculate time elapsed for 20 batches
@@ -189,6 +201,7 @@ def train(
 
         # Calculate the average loss over the entire training data
         avg_train_loss = total_loss / len(train_dataloader)
+        avg_train_acc = total_acc / len(train_dataloader)
 
         print("-" * 70)
         # =======================================
@@ -198,6 +211,10 @@ def train(
             # After the completion of each training epoch, measure the model's performance
             # on our validation set.
             val_loss, val_accuracy = evaluate(model, val_dataloader)
+            history["train_loss"].append(avg_train_loss)
+            history["train_acc"].append(avg_train_acc)
+            history["val_loss"].append(val_loss)
+            history["val_acc"].append(val_accuracy)
 
             # Print performance over the entire training data
             time_elapsed = time.time() - t0_epoch
@@ -209,3 +226,4 @@ def train(
         print("\n")
 
     print("Training complete!")
+    return history

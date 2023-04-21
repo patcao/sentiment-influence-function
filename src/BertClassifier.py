@@ -1,16 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import BertModel
+from transformers import AutoModel
+
+# self.bert = BertModel.from_pretrained("bert-base-uncased")
 
 
 class BertClassifier(nn.Module):
-    def __init__(self, freeze_bert=False):
+    def __init__(
+        self, pretrained_name: str = "distilbert-base-uncased", freeze_bert=False
+    ):
         super(BertClassifier, self).__init__()
-        D_in, H, D_out = 768, 50, 2
+        D_in, H, D_out = 768, 20, 2
 
-        self.bert = BertModel.from_pretrained("bert-base-uncased")
-
+        self.bert = AutoModel.from_pretrained(pretrained_name)
         self.classifier = nn.Sequential(
             nn.Linear(D_in, H), nn.ReLU(), nn.Linear(H, D_out)
         )
@@ -44,6 +47,8 @@ def bert_predict(model, test_dataloader, device):
         # Compute logits
         with torch.no_grad():
             logits = model(b_input_ids, b_attn_mask)
+        if hasattr(logits, "logits"):
+            logits = logits.logits
         all_logits.append(logits)
 
     # Concatenate logits from each batch
