@@ -1,13 +1,115 @@
 from __future__ import annotations
+
 import math
 from enum import Enum
 from pathlib import Path
 
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
-from transformers import AutoTokenizer
+from torch.utils.data import Dataset, TensorDataset
 from tqdm import tqdm
+from transformers import AutoTokenizer
+
+
+def create_loo_dataset(sst2_dataset, loo_guid):
+    guids, inputs, masks, labels = sst2_dataset.tensors
+    loo_mask = ~(guids == loo_guid)
+    return TensorDataset(
+        guids[loo_mask], inputs[loo_mask], masks[loo_mask], labels[loo_mask]
+    )
+
+
+def create_train_sst2(
+    device,
+    num_samples: int = -1,
+    tokenizer_name: str = None,
+    max_seq_len: int = 64,
+):
+    data_path = Path("data") / "train.csv"
+    train_df = pd.read_csv(data_path)
+    return create_sst2_dataset(
+        device, train_df, num_samples, tokenizer_name, max_seq_len
+    )
+
+
+def create_test_sst2(
+    device,
+    num_samples: int = -1,
+    tokenizer_name: str = None,
+    max_seq_len: int = 64,
+):
+    data_path = Path("data") / "val.csv"
+    test_df = pd.read_csv(data_path)
+    return create_sst2_dataset(
+        device, test_df, num_samples, tokenizer_name, max_seq_len
+    )
+
+
+def create_sst2_dataset(
+    device,
+    df: pd.DataFrame,
+    num_samples: int = -1,
+    tokenizer_name: str = None,
+    max_seq_len: int = 64,
+) -> Dataset:
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, do_lower_case=True)
+
+    if num_samples != -1:
+        df = df.iloc[:num_samples]
+        df = df.reset_index(drop=True)
+
+    inputs, masks = _preprocessing_for_bert(
+        data=df.sentence,
+        max_length=max_seq_len,
+        bert_tokenizer=tokenizer,
+        truncation=True,
+    )
+    guids = torch.IntTensor(df.guid).to(device)
+    labels = torch.LongTensor(df.label).to(device)
+    inputs, masks = inputs.to(device), masks.to(device)
+    return TensorDataset(guids, inputs, masks, labels)
+
+
+def _preprocessing_for_bert(data, max_length, bert_tokenizer, **kwargs):
+    """Perform required preprocessing steps for pretrained BERT.
+    @param    data (np.array): Array of texts to be processed.
+    @return   input_ids (torch.Tensor): Tensor of token ids to be fed to a model.
+    @return   attention_masks (torch.Tensor): Tensor of indices specifying which
+                    tokens should be attended to by the model.
+    """
+    # Create empty lists to store outputs
+    input_ids = []
+    attention_masks = []
+
+    # For every sentence...
+    for sent in tqdm(data):
+        # `encode_plus` will:
+        #    (1) Tokenize the sentence
+        #    (2) Add the `[CLS]` and `[SEP]` token to the start and end
+        #    (3) Truncate/Pad sentence to max length
+        #    (4) Map tokens to their IDs
+        #    (5) Create attention mask
+        #    (6) Return a dictionary of outputs
+        encoded_sent = bert_tokenizer.encode_plus(
+            text=sent,  # Preprocess sentence
+            add_special_tokens=True,  # Add `[CLS]` and `[SEP]`
+            max_length=max_length,  # Max length to truncate/pad
+            padding="max_length",
+            # pad_to_max_length=True,  # Pad sentence to max length
+            # return_tensors='pt',           # Return PyTorch tensor
+            return_attention_mask=True,  # Return attention mask
+            **kwargs,
+        )
+
+        # Add the outputs to the lists
+        input_ids.append(encoded_sent.get("input_ids"))
+        attention_masks.append(encoded_sent.get("attention_mask"))
+
+    # Convert lists to tensors
+    input_ids = torch.tensor(input_ids)
+    attention_masks = torch.tensor(attention_masks)
+
+    return input_ids, attention_masks
 
 
 class SST2Dataset(Dataset):
@@ -22,115 +124,34 @@ class SST2Dataset(Dataset):
     @classmethod
     def create_dataset(
         cls,
-        name: str,
         device,
         df: pd.DataFrame,
-        tokenizer=None,
+        tokenizer_name: str,
         max_seq_len: int = 64,
-        frac: float = 1,
     ) -> SST2Dataset:
         # Keep only a fraction of the data
-        keep_len = math.floor(frac * len(df))
-        df = df.iloc[:keep_len]
+        # keep_len = math.floor(frac * len(df))
+        # df = df.iloc[:keep_len]
 
-        if tokenizer is None:
-            # tokenizer = BertTokenizer.from_pretrained(
-            #     "bert-base-uncased", do_lower_case=True
-            # )
-            tokenizer = AutoTokenizer.from_pretrained(
-                "distilbert-base-uncased", do_lower_case=True
-            )
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, do_lower_case=True)
 
         inputs, masks = cls._preprocessing_for_bert(
             df.sentence, max_seq_len, tokenizer, truncation=True
         )
-        guids = torch.Tensor(df.guid).to(device)
+        guids = torch.IntTensor(df.guid).to(device)
         labels = torch.LongTensor(df.label).to(device)
         inputs, masks = inputs.to(device), masks.to(device)
-
-        return SST2Dataset(max_seq_len, tokenizer, df, guids, inputs, masks, labels)
-
-    @classmethod
-    def save_dataset(df, guids, inputs, masks, labels):
-        df.to_parquet(cls.PT_DIR / f"{name}-{frac}-df.pq")
-        torch.save(guids, cls.PT_DIR / f"{name}-{frac}-guids.pt")
-        torch.save(inputs, cls.PT_DIR / f"{name}-{frac}-inputs.pt")
-        torch.save(masks, cls.PT_DIR / f"{name}-{frac}-masks.pt")
-        torch.save(labels, cls.PT_DIR / f"{name}-{frac}-labels.pt")
-
-    @classmethod
-    def load_dataset(
-        cls,
-        name: str,
-        tokenizer=None,
-        max_seq_len: int = 64,
-    ) -> SST2Dataset:
-        if tokenizer is None:
-            tokenizer = BertTokenizer.from_pretrained(
-                "bert-base-uncased", do_lower_case=True
-            )
-        df = pd.read_parquet(cls.PT_DIR / f"{name}-{frac}-df.pq")
-        guids = torch.load(cls.PT_DIR / f"{name}-{frac}-guids.pt")
-        inputs = torch.load(cls.PT_DIR / f"{name}-{frac}-inputs.pt")
-        masks = torch.load(cls.PT_DIR / f"{name}-{frac}-masks.pt")
-        labels = torch.load(cls.PT_DIR / f"{name}-{frac}-labels.pt")
-        return SST2Dataset(max_seq_len, tokenizer, df, guids, inputs, masks, labels)
-
-    @classmethod
-    def _preprocessing_for_bert(cls, data, max_length, bert_tokenizer, **kwargs):
-        """Perform required preprocessing steps for pretrained BERT.
-        @param    data (np.array): Array of texts to be processed.
-        @return   input_ids (torch.Tensor): Tensor of token ids to be fed to a model.
-        @return   attention_masks (torch.Tensor): Tensor of indices specifying which
-                      tokens should be attended to by the model.
-        """
-        # Create empty lists to store outputs
-        input_ids = []
-        attention_masks = []
-
-        # For every sentence...
-        for sent in tqdm(data):
-            # `encode_plus` will:
-            #    (1) Tokenize the sentence
-            #    (2) Add the `[CLS]` and `[SEP]` token to the start and end
-            #    (3) Truncate/Pad sentence to max length
-            #    (4) Map tokens to their IDs
-            #    (5) Create attention mask
-            #    (6) Return a dictionary of outputs
-            encoded_sent = bert_tokenizer.encode_plus(
-                text=sent,  # Preprocess sentence
-                add_special_tokens=True,  # Add `[CLS]` and `[SEP]`
-                max_length=max_length,  # Max length to truncate/pad
-                padding="max_length",
-                # pad_to_max_length=True,  # Pad sentence to max length
-                # return_tensors='pt',           # Return PyTorch tensor
-                return_attention_mask=True,  # Return attention mask
-                **kwargs,
-            )
-
-            # Add the outputs to the lists
-            input_ids.append(encoded_sent.get("input_ids"))
-            attention_masks.append(encoded_sent.get("attention_mask"))
-
-        # Convert lists to tensors
-        input_ids = torch.tensor(input_ids)
-        attention_masks = torch.tensor(attention_masks)
-
-        return input_ids, attention_masks
+        return TensorDataset(inputs, masks, labels)
+        # return SST2Dataset(df, guids, inputs, masks, labels)
 
     def __init__(
         self,
-        max_seq_len: int,
-        tokenizer,
         df: pd.DataFrame,
         guids: torch.Tensor,
         inputs: torch.Tensor,
         masks: torch.Tensor,
         labels: torch.Tensor,
     ):
-        self.max_seq_len = max_seq_len
-        self.tokenizer = tokenizer
-
         self.df = df
         self.guids = guids
         self.inputs = inputs
@@ -142,8 +163,6 @@ class SST2Dataset(Dataset):
         tensor_mask = ~(self.guids == leave_out_guid)
 
         return SST2Dataset(
-            self.max_seq_len,
-            self.tokenizer,
             self.df,
             self.guids[tensor_mask],
             self.inputs[tensor_mask],
