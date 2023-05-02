@@ -1,7 +1,13 @@
+from typing import List
+
 import numpy as np
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
+
+import src.utils as utils
 
 
 def gather_flat_grad(grads):
@@ -26,13 +32,9 @@ def unflatten_to_param_dim(x, param_shape_tensor):
     return tar_p
 
 
-def hv(loss, model_params, v):  # according to pytorch issue #24004
-    #     s = time.time()
+def hv(loss, model_params, v):
     grad = autograd.grad(loss, model_params, create_graph=True, retain_graph=True)
-    #     e1 = time.time()
     Hv = autograd.grad(grad, model_params, grad_outputs=v)
-    #     e2 = time.time()
-    #     print('1st back prop: {} sec. 2nd back prop: {} sec'.format(e1-s, e2-e1))
     return Hv
 
 
@@ -48,25 +50,26 @@ def get_inverse_hvp_lissa(
     scale=1e4,
 ):
     ihvp = None
+    loss_fn = torch.nn.CrossEntropyLoss()
+
     for i in range(num_samples):
         cur_estimate = v
         lissa_data_iterator = iter(train_loader)
         for j in range(recursion_depth):
             try:
-                input_ids, input_mask, segment_ids, label_ids, guids = next(
-                    lissa_data_iterator
-                )
+                guids, input_ids, input_mask, label_ids = next(lissa_data_iterator)
             except StopIteration:
                 lissa_data_iterator = iter(train_loader)
-                input_ids, input_mask, segment_ids, label_ids, guids = next(
-                    lissa_data_iterator
-                )
+                guids, input_ids, input_mask, label_ids = next(lissa_data_iterator)
             input_ids = input_ids.to(device)
             input_mask = input_mask.to(device)
-            segment_ids = segment_ids.to(device)
+            # segment_ids = segment_ids.to(device)
             label_ids = label_ids.to(device)
             model.zero_grad()
-            train_loss = model(input_ids, segment_ids, input_mask, label_ids)
+            # train_loss = model(input_ids, input_mask, label_ids)
+            model_output = model(input_ids, input_mask)
+            train_loss = loss_fn(model_output, label_ids)
+
             hvp = hv(train_loss, param_influence, cur_estimate)
             cur_estimate = [
                 _a + (1 - damping) * _b - _c / scale
@@ -86,5 +89,74 @@ def get_inverse_hvp_lissa(
     return return_ihvp
 
 
-def compute_influence(model: nn.Module, train_dataloader, test_dataloader):
-    pass
+def compute_influence(
+    full_model: nn.Module,
+    test_guid: int,
+    param_influence: List,
+    train_dataset: Dataset,
+    test_dataset: Dataset,
+    lissa_r: int = 1,
+    lissa_depth: float = 0.25,
+    damping=3e-3,
+    scale=1e4,
+):
+    device = utils.get_device()
+    influences = np.zeros(len(train_dataset))
+    # param_influence = list(full_model.classifier.parameters())
+
+    train_dataloader_lissa = DataLoader(
+        train_dataset, batch_size=16, shuffle=True, drop_last=True
+    )
+    train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=1)
+    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+
+    for guid, input_ids, input_mask, label_ids in test_dataloader:
+        if guid != test_guid:
+            continue
+
+        full_model.eval()
+        # utils.set_seed(42)
+
+        input_ids = input_ids.to(device)
+        input_mask = input_mask.to(device)
+        label_ids = label_ids.to(device)
+
+        # L_TEST gradient
+        full_model.zero_grad()
+        output = full_model(input_ids, input_mask)
+        test_loss = full_model.compute_loss(output, label_ids)
+        test_grads = autograd.grad(test_loss, param_influence)
+
+        # IVHP
+        full_model.train()
+
+        t = int(len(train_dataloader) * lissa_depth)
+        print(f"LiSSA reps: {lissa_r} and num_iterations: {t}")
+
+        inverse_hvp = get_inverse_hvp_lissa(
+            test_grads,
+            full_model,
+            device,
+            param_influence,
+            train_dataloader_lissa,
+            damping=damping,
+            scale=scale,
+            num_samples=lissa_r,
+            recursion_depth=t,
+        )
+
+        for train_guid, train_input_id, train_input_mask, train_label in tqdm(
+            train_dataloader
+        ):
+            full_model.train()
+            full_model.zero_grad()
+            train_output = full_model(train_input_id, train_input_mask)
+            train_loss = full_model.compute_loss(train_output, train_label)
+
+            train_grads = autograd.grad(train_loss, param_influence)
+            influences[train_guid] = torch.dot(
+                inverse_hvp, gather_flat_grad(train_grads)
+            ).item()
+
+        break
+    return influences

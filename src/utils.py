@@ -72,6 +72,44 @@ def get_auc_CV(model, X_train_tfidf, y_train):
     return auc.mean()
 
 
+def evaluate_loss_df(model, dataloader):
+    """After the completion of each training epoch, measure the model's performance
+    on our validation set.
+    """
+    # Put the model into the evaluation mode. The dropout layers are disabled during
+    # the test time.
+    model.eval()
+    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+
+    test_losses = []
+    # For each batch in our validation set...
+    for batch in dataloader:
+        # Load batch to GPU
+        b_guids, b_input_ids, b_attn_mask, b_labels = batch
+
+        # Compute logits
+        with torch.no_grad():
+            logits = model(b_input_ids, b_attn_mask)
+        if hasattr(logits, "logits"):
+            logits = logits.logits
+
+        # Get the predictions
+        pred = torch.argmax(logits, dim=1).flatten()
+
+        # Compute loss
+        loss = loss_fn(logits, b_labels)
+        test_losses.append(
+            {
+                "test_guid": b_guids.item(),
+                "label": b_labels.item(),
+                "pred": pred.item(),
+                "loss": loss.item(),
+            }
+        )
+
+    return pd.DataFrame(test_losses)
+
+
 def evaluate(model, dataloader):
     """After the completion of each training epoch, measure the model's performance
     on our validation set.
@@ -255,122 +293,3 @@ def train(
         wandb.log(metrics)
 
     return timings
-
-
-def old_train(
-    model,
-    optimizer,
-    train_dataloader,
-    val_dataloader=None,
-    scheduler=None,
-    epochs: int = 4,
-    evaluation: bool = False,
-    print_epoch_pct: float = 0.2,
-):
-    """Train the BertClassifier model."""
-    device = get_device()
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    total_steps = len(train_dataloader) * epochs
-    print_steps = print_epoch_pct * total_steps
-    history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
-
-    # Start training loop
-    for epoch_i in range(epochs):
-        # =======================================
-        #               Training
-        # =======================================
-        # Print the header of the result table
-        print(
-            f"{'Epoch':^7} | {'Batch':^7} | {'Train Loss':^12} | {'Val Loss':^10} | {'Val Acc':^9} | {'Elapsed':^9}"
-        )
-        print("-" * 70)
-
-        # Measure the elapsed time of each epoch
-        t0_epoch, t0_batch = time.time(), time.time()
-
-        # Reset tracking variables at the beginning of each epoch
-        total_acc, total_loss, batch_loss, batch_counts = 0, 0, 0, 0
-
-        # Put the model into the training mode
-        model.train()
-
-        with tqdm(train_dataloader, unit="batch") as tepoch:
-            for step, batch in enumerate(tepoch):
-                batch_counts += 1
-                # Load batch to GPU
-                b_input_ids, b_attn_mask, b_labels = tuple(t.to(device) for t in batch)
-
-                # Zero out any previously calculated gradients
-                model.zero_grad()
-
-                # Perform a forward pass. This will return logits.
-                logits = model(b_input_ids, b_attn_mask)
-                if hasattr(logits, "logits"):
-                    logits = logits.logits
-                # Compute loss and accumulate the loss values
-                loss = loss_fn(logits, b_labels)
-                batch_loss += loss.item()
-                total_loss += loss.item()
-
-                # Get the predictions
-                preds = torch.argmax(logits, dim=1).flatten()
-                accuracy = (preds == b_labels).cpu().numpy().mean() * 100
-                total_acc += accuracy
-
-                # Perform a backward pass to calculate gradients
-                loss.backward()
-
-                # Clip the norm of the gradients to 1.0 to prevent "exploding gradients"
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
-                # Update parameters and the learning rate
-                optimizer.step()
-
-                if scheduler is not None:
-                    scheduler.step()
-
-                # Print the loss values and time elapsed for every print_steps
-                if (step % print_steps == 0 and step != 0) or (
-                    step == len(train_dataloader) - 1
-                ):
-                    # Calculate time elapsed for 20 batches
-                    time_elapsed = time.time() - t0_batch
-
-                    # Print training results
-                    print(
-                        f"{epoch_i + 1:^7} | {step:^7} | {batch_loss / batch_counts:^12.6f} | {'-':^10} | {'-':^9} | {time_elapsed:^9.2f}"
-                    )
-
-                    # Reset batch tracking variables
-                    batch_loss, batch_counts = 0, 0
-                    t0_batch = time.time()
-
-        # Calculate the average loss over the entire training data
-        avg_train_loss = total_loss / len(train_dataloader)
-        avg_train_acc = total_acc / len(train_dataloader)
-
-        print("-" * 70)
-        # =======================================
-        #               Evaluation
-        # =======================================
-        if evaluation == True:
-            # After the completion of each training epoch, measure the model's performance
-            # on our validation set.
-            val_loss, val_accuracy = evaluate(model, val_dataloader)
-            history["train_loss"].append(avg_train_loss)
-            history["train_acc"].append(avg_train_acc)
-            history["val_loss"].append(val_loss)
-            history["val_acc"].append(val_accuracy)
-
-            # Print performance over the entire training data
-            time_elapsed = time.time() - t0_epoch
-
-            print(
-                f"{epoch_i + 1:^7} | {'-':^7} | {avg_train_loss:^12.6f} | {val_loss:^10.6f} | {val_accuracy:^9.2f} | {time_elapsed:^9.2f}"
-            )
-            print("-" * 70)
-        print("\n")
-
-    print("Training complete!")
-    return history

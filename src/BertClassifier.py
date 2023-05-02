@@ -33,6 +33,8 @@ def create_bert_classifier(
 
 
 class BertClassifier(nn.Module):
+    loss_fn = nn.CrossEntropyLoss()
+
     def __init__(
         self,
         pretrained_name: str = "distilbert-base-uncased",
@@ -72,6 +74,9 @@ class BertClassifier(nn.Module):
         last_hidden_state = outputs[0][:, 0, :]
         logits = self.classifier(last_hidden_state)
         return logits
+
+    def compute_loss(self, logits, labels):
+        return self.loss_fn(logits, labels)
 
 
 def bert_predict(model, test_dataloader, device):

@@ -1,0 +1,1 @@
+python leave_one_out.py --config-path loo/classifier.yaml --output-dir loo --loo-guid-start 1 --loo-guid-end 1000 --num-training-examples 2000 --epochs 3

@@ -24,7 +24,7 @@ def create_train_sst2(
     num_samples: int = -1,
     tokenizer_name: str = None,
     max_seq_len: int = 64,
-):
+) -> Dataset:
     data_path = Path("data") / "train.csv"
     train_df = pd.read_csv(data_path)
     return create_sst2_dataset(
@@ -37,7 +37,7 @@ def create_test_sst2(
     num_samples: int = -1,
     tokenizer_name: str = None,
     max_seq_len: int = 64,
-):
+) -> Dataset:
     data_path = Path("data") / "val.csv"
     test_df = pd.read_csv(data_path)
     return create_sst2_dataset(
