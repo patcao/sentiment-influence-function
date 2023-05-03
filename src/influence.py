@@ -95,6 +95,7 @@ def compute_influence(
     param_influence: List,
     train_dataset: Dataset,
     test_dataset: Dataset,
+    training_indices=None,
     lissa_r: int = 1,
     lissa_depth: float = 0.25,
     damping=3e-3,
@@ -115,7 +116,6 @@ def compute_influence(
             continue
 
         full_model.eval()
-        # utils.set_seed(42)
 
         input_ids = input_ids.to(device)
         input_mask = input_mask.to(device)
@@ -148,6 +148,9 @@ def compute_influence(
         for train_guid, train_input_id, train_input_mask, train_label in tqdm(
             train_dataloader
         ):
+            if training_indices is not None and train_guid not in training_indices:
+                continue
+
             full_model.train()
             full_model.zero_grad()
             train_output = full_model(train_input_id, train_input_mask)
@@ -157,6 +160,104 @@ def compute_influence(
             influences[train_guid] = torch.dot(
                 inverse_hvp, gather_flat_grad(train_grads)
             ).item()
+
+        break
+    return influences
+
+
+def compute_input_influence(
+    full_model: nn.Module,
+    test_guid: int,
+    param_influence: List,
+    train_dataset: Dataset,
+    test_dataset: Dataset,
+    training_indices=None,
+    lissa_r: int = 1,
+    lissa_depth: float = 0.25,
+    damping=3e-3,
+    scale=1e4,
+):
+    device = utils.get_device()
+    influences = np.zeros(len(train_dataset))
+    # param_influence = list(full_model.classifier.parameters())
+
+    train_dataloader_lissa = DataLoader(
+        train_dataset, batch_size=16, shuffle=True, drop_last=True
+    )
+
+    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+
+    for guid, input_ids, input_mask, label_ids in test_dataloader:
+        if guid != test_guid:
+            continue
+
+        full_model.eval()
+
+        input_ids = input_ids.to(device)
+        input_mask = input_mask.to(device)
+        label_ids = label_ids.to(device)
+
+        # L_TEST gradient
+        full_model.zero_grad()
+        output = full_model(input_ids, input_mask)
+        test_loss = full_model.compute_loss(output, label_ids)
+        test_grads = autograd.grad(test_loss, param_influence)
+
+        # IVHP
+        full_model.train()
+
+        t = int(len(train_dataset) * lissa_depth)
+        print(f"LiSSA reps: {lissa_r} and num_iterations: {t}")
+
+        inverse_hvp = get_inverse_hvp_lissa(
+            test_grads,
+            full_model,
+            device,
+            param_influence,
+            train_dataloader_lissa,
+            damping=damping,
+            scale=scale,
+            num_samples=lissa_r,
+            recursion_depth=t,
+        )
+
+        train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=1)
+        for train_guid, train_input_id, train_input_mask, train_label in tqdm(
+            train_dataloader
+        ):
+            if training_indices is not None and train_guid not in training_indices:
+                continue
+
+            full_model.train()
+            full_model.zero_grad()
+
+            token_embeds = (
+                full_model.bert.get_input_embeddings().weight[train_input_id].clone()
+            )
+            token_embeds.requires_grad = True
+
+            train_output = full_model(
+                inputs_embeds=token_embeds, attention_mask=train_input_mask
+            )
+            train_loss = full_model.compute_loss(train_output, train_label)
+
+            grad_theta = autograd.grad(train_loss, param_influence, create_graph=True)[
+                0
+            ]
+
+            # Compute the gradient of the loss with respect to x
+            grad_x = torch.autograd.grad(
+                grad_theta.sum(), token_embeds, retain_graph=True
+            )
+            import pdb
+
+            pdb.set_trace()
+
+            num_params = np.sum([p.numel() for p in param_influence])
+            # Reshape the gradient of the loss with respect to theta into a p by d matrix
+            grad_theta_x = grad_theta.view(num_params, -1).t()
+
+            influences[train_guid] = torch.dot(inverse_hvp, grad_theta_x).item()
 
         break
     return influences

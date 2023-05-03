@@ -78,79 +78,54 @@ def evaluate_loss_df(model, dataloader):
     """
     # Put the model into the evaluation mode. The dropout layers are disabled during
     # the test time.
+    device = get_device()
+
+    model.to(device)
+
     model.eval()
     loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
 
     test_losses = []
+    # Tracking variables
+    val_accuracy = []
+    val_loss = []
     # For each batch in our validation set...
     for batch in dataloader:
         # Load batch to GPU
-        b_guids, b_input_ids, b_attn_mask, b_labels = batch
+        b_guids, b_input_ids, b_attn_mask, b_labels = (t.to(device) for t in batch)
 
         # Compute logits
         with torch.no_grad():
             logits = model(b_input_ids, b_attn_mask)
         if hasattr(logits, "logits"):
             logits = logits.logits
+
+        # Compute loss
+        loss = loss_fn(logits, b_labels)
 
         # Get the predictions
         pred = torch.argmax(logits, dim=1).flatten()
 
-        # Compute loss
-        loss = loss_fn(logits, b_labels)
+        # Calculate the accuracy rate
+        accuracy = (pred == b_labels).cpu().numpy().mean() * 100
+        val_accuracy.append(accuracy)
+        val_loss.append(loss.cpu().item())
+
         test_losses.append(
             {
                 "test_guid": b_guids.item(),
-                "label": b_labels.item(),
+                "logits": logits.cpu().numpy().squeeze(0),
                 "pred": pred.item(),
+                "label": b_labels.item(),
                 "loss": loss.item(),
             }
         )
-
-    return pd.DataFrame(test_losses)
-
-
-def evaluate(model, dataloader):
-    """After the completion of each training epoch, measure the model's performance
-    on our validation set.
-    """
-    # Put the model into the evaluation mode. The dropout layers are disabled during
-    # the test time.
-    model.eval()
-    device = get_device()
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    # Tracking variables
-    val_accuracy = []
-    val_loss = []
-
-    # For each batch in our validation set...
-    for batch in dataloader:
-        # Load batch to GPU
-        b_guids, b_input_ids, b_attn_mask, b_labels = tuple(t.to(device) for t in batch)
-
-        # Compute logits
-        with torch.no_grad():
-            logits = model(b_input_ids, b_attn_mask)
-        if hasattr(logits, "logits"):
-            logits = logits.logits
-
-        # Compute loss
-        loss = loss_fn(logits, b_labels)
-        val_loss.append(loss.item())
-
-        # Get the predictions
-        preds = torch.argmax(logits, dim=1).flatten()
-
-        # Calculate the accuracy rate
-        accuracy = (preds == b_labels).cpu().numpy().mean() * 100
-        val_accuracy.append(accuracy)
 
     # Compute the average accuracy and loss over the validation set.
     val_loss = np.mean(val_loss)
     val_accuracy = np.mean(val_accuracy)
 
-    return val_loss, val_accuracy
+    return pd.DataFrame(test_losses), val_loss, val_accuracy
 
 
 class BertLRScheduler(LambdaLR):
@@ -286,7 +261,7 @@ def train(
         }
 
         if val_dataloader is not None:
-            val_loss, val_acc = evaluate(model, val_dataloader)
+            _, val_loss, val_acc = evaluate_loss_df(model, val_dataloader)
             metrics["val/loss"] = val_loss
             metrics["val/accuracy"] = val_acc
 

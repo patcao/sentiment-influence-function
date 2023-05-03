@@ -18,7 +18,8 @@ def create_bert_classifier(
     freeze_bert=True,
     random_state: int = 42,
 ) -> BertClassifier:
-    utils.set_seed(random_state)  # Set seed for reproducibility
+    if random_state is not None:
+        utils.set_seed(random_state)  # Set seed for reproducibility
 
     bert_classifier = BertClassifier(
         pretrained_name=bert_pretrained_name,
@@ -69,8 +70,14 @@ class BertClassifier(nn.Module):
             for param in self.bert.parameters():
                 param.requires_grad = False
 
-    def forward(self, input_ids, attention_mask):
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+    def forward(self, input_ids=None, attention_mask=None, inputs_embeds=None):
+        if input_ids is None:
+            outputs = self.bert(
+                inputs_embeds=inputs_embeds, attention_mask=attention_mask
+            )
+        else:
+            outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+
         last_hidden_state = outputs[0][:, 0, :]
         logits = self.classifier(last_hidden_state)
         return logits

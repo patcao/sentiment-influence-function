@@ -45,7 +45,7 @@ def main(args):
     # print(f"Test: {len(test_dataloader)}")
     for loo_guid in range(args.loo_guid_start, args.loo_guid_end):
         config["loo_guid"] = loo_guid
-        run = wandb.init(project="LOO-10k-BertClassifier", config=config)
+        run = wandb.init(project="LOO-10k-BertClassifier2", config=config)
 
         # Create LOO directory
         output_dir = Path(args.output_dir) / f"run_{loo_guid}"
@@ -64,11 +64,15 @@ def main(args):
             classifier_hidden_size=config["classifier_hidden_size"],
             classifier_drop_out=config["classifier_drop_out"],
             freeze_bert=True,
-            random_state=42,
+            random_state=None
+            # random_state=42,
         )
-        torch.save(
-            model.classifier.state_dict(), output_dir / "init_classifier_params.pt"
+        model.classifier.load_state_dict(
+            torch.load("loo_10k_10ep_2/init_classifier_params.pt")
         )
+        # torch.save(
+        #     model.classifier.state_dict(), output_dir / "init_classifier_params.pt"
+        # )
 
         # Do training
         optimizer = Adam(model.classifier.parameters(), lr=config["learning_rate"])
@@ -83,17 +87,15 @@ def main(args):
             val_dataloader=None,
         )
 
-        test_loss, test_acc = utils.evaluate(model, test_dataloader)
+        df, test_loss, test_acc = utils.evaluate_loss_df(model, test_dataloader)
         wandb.summary["test/loss"] = test_loss
         wandb.summary["test/accuracy"] = test_acc
 
         wandb.finish()
+
         torch.save(
             model.classifier.state_dict(), output_dir / "trained_classifier_params.pt"
         )
-
-        # Compute loss for each test point
-        df = utils.evaluate_loss_df(model, test_dataloader)
         df.to_csv(output_dir / "test_loss.csv", index=False)
 
 
