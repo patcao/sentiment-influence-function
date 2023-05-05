@@ -10,6 +10,16 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 
+def get_train_df() -> pd.DataFrame:
+    data_path = Path("data") / "train.csv"
+    return pd.read_csv(data_path)
+
+
+def get_test_df() -> pd.DataFrame:
+    data_path = Path("data") / "val.csv"
+    return pd.read_csv(data_path)
+
+
 def create_loo_dataset(sst2_dataset: Dataset, loo_guids: Union[int, List[int]]):
     guids, inputs, masks, labels = sst2_dataset.tensors
 
@@ -27,6 +37,28 @@ def create_loo_dataset(sst2_dataset: Dataset, loo_guids: Union[int, List[int]]):
     return TensorDataset(
         guids[loo_mask], inputs[loo_mask], masks[loo_mask], labels[loo_mask]
     )
+
+
+def get_train_example(guid: int):
+    train_df = get_train_df()
+    return train_df[train_df.guid == guid]
+
+
+def get_test_example(guid: int):
+    test_df = get_test_df()
+    return test_df[test_df.guid == guid]
+
+
+def get_tokens_from_ids(input_ids, bert_name: str = "distilbert-base-uncased"):
+    tokenizer = AutoTokenizer.from_pretrained(bert_name, do_lower_case=True)
+
+    trimmed_input_ids = []
+    for input_id in input_ids:
+        trimmed_input_ids.append(input_id)
+        if input_id == 102:
+            break
+
+    return tokenizer.convert_ids_to_tokens(trimmed_input_ids)
 
 
 def create_train_sst2(
@@ -55,30 +87,6 @@ def create_test_sst2(
     return create_sst2_dataset(
         device, test_df, num_samples, tokenizer_name, max_seq_len
     )
-
-
-def get_test_example(guid: int):
-    data_path = Path("data") / "val.csv"
-    test_df = pd.read_csv(data_path)
-    return test_df[test_df.guid == guid]
-
-
-def get_train_example(guid: int):
-    data_path = Path("data") / "train.csv"
-    train_df = pd.read_csv(data_path)
-    return train_df[train_df.guid == guid]
-
-
-def get_tokens_from_ids(input_ids, bert_name: str = "distilbert-base-uncased"):
-    tokenizer = AutoTokenizer.from_pretrained(bert_name, do_lower_case=True)
-
-    trimmed_input_ids = []
-    for input_id in input_ids:
-        trimmed_input_ids.append(input_id)
-        if input_id == 102:
-            break
-
-    return tokenizer.convert_ids_to_tokens(trimmed_input_ids)
 
 
 def create_sst2_dataset(

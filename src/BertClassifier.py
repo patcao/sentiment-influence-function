@@ -16,10 +16,12 @@ def create_bert_classifier(
     classifier_hidden_size: int,
     classifier_drop_out: float = 0,
     freeze_bert=True,
+    classifier_init_state_path: str = None,
     random_state: int = 42,
 ) -> BertClassifier:
     if random_state is not None:
         utils.set_seed(random_state)  # Set seed for reproducibility
+    device = utils.get_device()
 
     bert_classifier = BertClassifier(
         pretrained_name=bert_pretrained_name,
@@ -29,7 +31,11 @@ def create_bert_classifier(
         classifier_type=classifier_type,
     )
 
-    device = utils.get_device()
+    if classifier_init_state_path:
+        bert_classifier.classifier.load_state_dict(
+            torch.load(classifier_init_state_path)
+        )
+
     return bert_classifier.to(device)
 
 
@@ -82,36 +88,10 @@ class BertClassifier(nn.Module):
         logits = self.classifier(last_hidden_state)
         return logits
 
-    def compute_loss(self, logits, labels):
+    def compute_loss(self, logits, labels) -> float:
         return self.loss_fn(logits, labels)
 
-
-def bert_predict(model, test_dataloader, device):
-    """Perform a forward pass on the trained BERT model to predict probabilities
-    on the test set.
-    """
-    # Put the model into the evaluation mode. The dropout layers are disabled during
-    # the test time.
-    model.eval()
-
-    all_logits = []
-
-    # For each batch in our test set...
-    for batch in test_dataloader:
-        # Load batch to GPU
-        b_input_ids, b_attn_mask = tuple(t.to(device) for t in batch)[:2]
-
-        # Compute logits
-        with torch.no_grad():
-            logits = model(b_input_ids, b_attn_mask)
-        if hasattr(logits, "logits"):
-            logits = logits.logits
-        all_logits.append(logits)
-
-    # Concatenate logits from each batch
-    all_logits = torch.cat(all_logits, dim=0)
-
-    # Apply softmax to calculate probabilities
-    probs = F.softmax(all_logits, dim=1).cpu().numpy()
-
-    return probs
+    def compute_accuracy(self, logits, labels) -> float:
+        # Get the predictions
+        preds = torch.argmax(logits, dim=1).flatten()
+        return (preds == labels).cpu().numpy().mean() * 100

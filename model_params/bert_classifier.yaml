@@ -1,0 +1,10 @@
+epochs: 5
+bert_model_name: distilbert-base-uncased
+max_sequence_length: 64
+learning_rate: 0.005
+lr_warmup_pct: 0.2
+batch_size: 16
+classifier_init_state_path: model_params/init_classifier_params.pt
+classifier_type: single-fc
+classifier_hidden_size: 0
+classifier_drop_out: 0

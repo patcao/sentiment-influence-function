@@ -13,6 +13,8 @@ __all__ = [
 ]
 
 from src.torch_influence.base import BaseInfluenceModule, BaseObjective
-from src.torch_influence.modules import (AutogradInfluenceModule,
-                                         CGInfluenceModule,
-                                         LiSSAInfluenceModule)
+from src.torch_influence.modules import (
+    AutogradInfluenceModule,
+    CGInfluenceModule,
+    LiSSAInfluenceModule,
+)

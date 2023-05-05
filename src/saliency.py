@@ -62,6 +62,9 @@ def compute_saliency_map(
     dataset: Dataset,
     bert_name: str = "distilbert-base-uncased",
 ):
+    """
+    Computes the saliency map
+    """
     tokenizer = AutoTokenizer.from_pretrained(bert_name, do_lower_case=True)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
     ret_map = {}
