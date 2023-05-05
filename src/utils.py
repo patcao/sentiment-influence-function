@@ -1,8 +1,5 @@
 import math
-import os
 import random
-import re
-import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -153,7 +150,6 @@ def train(
     config,
     model,
     optimizer,
-    loss_fn,
     train_dataloader,
     val_dataloader=None,
     random_state=None,
@@ -171,43 +167,19 @@ def train(
         end_lr=1e-6,
     )
 
-    timings = {
-        "data_load_time": [],
-        "bert_fp_time": [],
-        "cls_fp_time": [],
-        "backprop_time": [],
-        "opt_time": [],
-    }
     for epoch_i in range(1, config["epochs"] + 1):
         model.train()
 
         total_acc, total_loss, batch_loss = 0, 0, 0
-        data_load_time, bert_fp_time, cls_fp_time, backprop_time, opt_time = (
-            0,
-            0,
-            0,
-            0,
-            0,
-        )
-
         with tqdm(train_dataloader, unit="batch") as tepoch:
             for step, batch in enumerate(tepoch):
-                batch_start = time.time()
                 b_guids, b_input_ids, b_attn_mask, b_labels = tuple(
                     t.to(device) for t in batch
                 )
-                b_data_load_time = time.time()
 
                 model.zero_grad()
-                # TODO can we cache the bert layer here?
-                # bert_out = model.bert(b_input_ids, b_attn_mask)
-                # logits = model.classifier(bert_out)
                 logits = model(b_input_ids, b_attn_mask)
-                b_bert_fp_time = time.time()
-                if hasattr(logits, "logits"):
-                    logits = logits.logits
-
-                loss = loss_fn(logits, b_labels)
+                loss = model.compute_loss(logits, b_labels)
                 batch_loss = loss.item()
                 total_loss += batch_loss
 
@@ -215,11 +187,9 @@ def train(
                 preds = torch.argmax(logits, dim=1).flatten()
                 accuracy = (preds == b_labels).cpu().numpy().mean() * 100
                 total_acc += accuracy
-                b_cls_fp_time = time.time()
 
                 # Perform a backward pass to calculate gradients
                 loss.backward()
-                b_backprop_time = time.time()
 
                 # Clip the norm of the gradients to 1.0 to prevent "exploding gradients"
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -227,32 +197,12 @@ def train(
                 # Update parameters and the learning rate
                 optimizer.step()
                 scheduler.step()
-
-                b_opt_time = time.time()
-
                 wandb.log({"train/batch_loss": batch_loss / len(batch)})
-                data_load_time += b_data_load_time - batch_start
-                bert_fp_time += b_bert_fp_time - b_data_load_time
-                cls_fp_time += b_cls_fp_time - b_bert_fp_time
-                backprop_time += b_backprop_time - b_cls_fp_time
-                opt_time += b_opt_time - b_backprop_time
 
         # Calculate the average loss over the entire training data
         num_batches = len(train_dataloader)
         avg_train_loss = total_loss / num_batches
         avg_train_acc = total_acc / num_batches
-
-        data_load_time /= num_batches
-        bert_fp_time = bert_fp_time / num_batches
-        cls_fp_time /= num_batches
-        backprop_time /= num_batches
-        opt_time /= num_batches
-
-        timings["data_load_time"].append(data_load_time)
-        timings["bert_fp_time"].append(bert_fp_time)
-        timings["cls_fp_time"].append(cls_fp_time)
-        timings["backprop_time"].append(backprop_time)
-        timings["opt_time"].append(opt_time)
 
         metrics = {
             "train/loss": avg_train_loss,
@@ -266,5 +216,3 @@ def train(
             metrics["val/accuracy"] = val_acc
 
         wandb.log(metrics)
-
-    return timings

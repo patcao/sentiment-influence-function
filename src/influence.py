@@ -178,8 +178,6 @@ def compute_input_influence(
     scale=1e4,
 ):
     device = utils.get_device()
-    influences = np.zeros(len(train_dataset))
-    # param_influence = list(full_model.classifier.parameters())
 
     train_dataloader_lissa = DataLoader(
         train_dataset, batch_size=16, shuffle=True, drop_last=True
@@ -222,6 +220,13 @@ def compute_input_influence(
         )
 
         train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=1)
+
+        _, input_id, _, _ = next(iter(train_dataloader))
+        token_embed = full_model.bert.get_input_embeddings().weight[input_id].clone()
+        num_tokens = token_embed.shape[1]
+        embedding_size = token_embed.shape[2]
+
+        influences = np.zeros((len(train_dataset), num_tokens, embedding_size))
         for train_guid, train_input_id, train_input_mask, train_label in tqdm(
             train_dataloader
         ):
@@ -239,25 +244,42 @@ def compute_input_influence(
             train_output = full_model(
                 inputs_embeds=token_embeds, attention_mask=train_input_mask
             )
-            train_loss = full_model.compute_loss(train_output, train_label)
+            loss = full_model.compute_loss(train_output, train_label)
 
-            grad_theta = autograd.grad(train_loss, param_influence, create_graph=True)[
-                0
-            ]
+            grad_theta = torch.autograd.grad(loss, param_influence, create_graph=True)
+            # grad_x = torch.autograd.grad(loss, token_embeds, create_graph=True)[0]
 
-            # Compute the gradient of the loss with respect to x
-            grad_x = torch.autograd.grad(
-                grad_theta.sum(), token_embeds, retain_graph=True
-            )
-            import pdb
+            flat_grad_theta = torch.cat([p.flatten() for p in grad_theta])
+            num_params = len(flat_grad_theta)
 
-            pdb.set_trace()
+            # compute the second-order partial derivative of the loss
+            hessian = torch.zeros(
+                (
+                    num_params,
+                    num_tokens,
+                    embedding_size,
+                )
+            ).to(device)
 
-            num_params = np.sum([p.numel() for p in param_influence])
-            # Reshape the gradient of the loss with respect to theta into a p by d matrix
-            grad_theta_x = grad_theta.view(num_params, -1).t()
+            for p in range(num_params):
+                grad2_x_theta = torch.autograd.grad(
+                    flat_grad_theta[p], token_embeds, retain_graph=True
+                )
+                grad2_x_theta = torch.reshape(
+                    grad2_x_theta[0], (num_tokens, embedding_size)
+                )
+                hessian[p] = grad2_x_theta
 
-            influences[train_guid] = torch.dot(inverse_hvp, grad_theta_x).item()
+            # grad2_x_theta = torch.autograd.grad(flat_grad_theta, token_embeds)
+            # for i in range(num_tokens):
+            #     for j in range(embedding_size):
+            #         grad2_x_theta = torch.autograd.grad(grad_x[0, i, j], param_influence)
 
+            #         hessian[i, j] = torch.cat([grad2_x_theta[p_idx].flatten() for p_idx in range(num_params)])
+
+            # # Reshape the gradient of the loss with respect to theta into a p by d matrix
+            influences[train_guid] = torch.reshape(
+                inverse_hvp @ hessian.view(num_params, -1), (num_tokens, embedding_size)
+            ).cpu()
         break
     return influences
