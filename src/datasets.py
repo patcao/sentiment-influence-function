@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, TensorDataset
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 
 
 def get_train_df() -> pd.DataFrame:
@@ -62,40 +62,53 @@ def get_tokens_from_ids(input_ids, bert_name: str = "distilbert-base-uncased"):
 
 
 def create_train_sst2(
-    device,
     num_samples: int = -1,
-    tokenizer_name: str = None,
+    tokenizer_name: str = "distilbert-base-uncased",
     max_seq_len: int = 64,
+    use_bert_embeddings=False,
+    device=None,
 ) -> Dataset:
     """guid, inputs, masks, labels"""
     data_path = Path("data") / "train.csv"
     train_df = pd.read_csv(data_path)
     return create_sst2_dataset(
-        device, train_df, num_samples, tokenizer_name, max_seq_len
+        train_df,
+        num_samples,
+        tokenizer_name,
+        max_seq_len,
+        device=device,
+        use_bert_embeddings=use_bert_embeddings,
     )
 
 
 def create_test_sst2(
-    device,
     num_samples: int = -1,
-    tokenizer_name: str = None,
+    tokenizer_name: str = "distilbert-base-uncased",
     max_seq_len: int = 64,
+    use_bert_embeddings=False,
+    device=None,
 ) -> Dataset:
     """guid, inputs, masks, labels"""
     data_path = Path("data") / "val.csv"
     test_df = pd.read_csv(data_path)
     return create_sst2_dataset(
-        device, test_df, num_samples, tokenizer_name, max_seq_len
+        test_df,
+        num_samples,
+        tokenizer_name,
+        max_seq_len,
+        device=device,
+        use_bert_embeddings=use_bert_embeddings,
     )
 
 
 def create_sst2_dataset(
-    device,
     df: pd.DataFrame,
     num_samples: int = -1,
     tokenizer_name: str = None,
     max_seq_len: int = 64,
-) -> Dataset:
+    use_bert_embeddings=False,
+    device=None,
+) -> TensorDataset:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, do_lower_case=True)
 
     if num_samples != -1:
@@ -108,10 +121,26 @@ def create_sst2_dataset(
         bert_tokenizer=tokenizer,
         truncation=True,
     )
-    guids = torch.IntTensor(df.guid).to(device)
-    labels = torch.LongTensor(df.label).to(device)
-    inputs, masks = inputs.to(device), masks.to(device)
-    return TensorDataset(guids, inputs, masks, labels)
+    guids = torch.IntTensor(df.guid)
+    labels = torch.LongTensor(df.label)
+    inputs, masks = inputs, masks
+
+    # Use the BERT embedding for each token instead of the id
+    if use_bert_embeddings:
+        bert_pretrained = AutoModel.from_pretrained(tokenizer_name)
+        word_embeddings = bert_pretrained.get_input_embeddings()
+        inputs = word_embeddings(inputs).detach().clone()
+
+    if device is not None:
+        guids = guids.to(device)
+        inputs = inputs.to(device)
+        masks = masks.to(device)
+        labels = labels.to(device)
+    dataset = TensorDataset(guids, inputs, masks, labels)
+
+    # TODO very hacky, subclass Dataset instead
+    dataset.use_bert_embeddings = use_bert_embeddings
+    return dataset
 
 
 def _preprocessing_for_bert(data, max_length, bert_tokenizer, **kwargs):

@@ -12,7 +12,7 @@ import wandb
 from src import BertClassifier, utils
 
 
-def evaluate_loss(model, dataloader):
+def evaluate_loss(model, dataloader, use_bert_embeddings=False):
     """After the completion of each training epoch, measure the model's performance
     on our validation set.
     """
@@ -33,7 +33,11 @@ def evaluate_loss(model, dataloader):
 
         # Compute logits
         with torch.no_grad():
-            logits = model(b_input_ids, b_attn_mask)
+            logits = model(
+                inputs=b_input_ids,
+                attention_mask=b_attn_mask,
+                use_bert_embeddings=use_bert_embeddings,
+            )
 
         # Compute loss
         loss = model.compute_loss(logits, b_labels)
@@ -67,6 +71,7 @@ def train_bert_model(
     train_dataset,
     test_dataset,
     config,
+    use_bert_embeddings=False,
     validation_dataset=None,
     wandb_project="Bert-scratch",
     wandb_tags=None,
@@ -96,9 +101,12 @@ def train_bert_model(
         optimizer=optimizer,
         train_dataloader=train_dataloader,
         val_dataloader=validation_dataset,
+        use_bert_embeddings=use_bert_embeddings,
     )
 
-    fdf, test_loss, test_acc = evaluate_loss(model, test_dataloader)
+    fdf, test_loss, test_acc = evaluate_loss(
+        model, test_dataloader, use_bert_embeddings=use_bert_embeddings
+    )
 
     wandb.summary["test/loss"] = test_loss
     wandb.summary["test/accuracy"] = test_acc
@@ -133,6 +141,7 @@ def train(
     model,
     optimizer,
     train_dataloader,
+    use_bert_embeddings=False,
     val_dataloader=None,
     random_state=None,
 ):
@@ -140,6 +149,7 @@ def train(
         utils.set_seed(random_state)  # Set seed for reproducibility
 
     device = utils.get_device()
+    model = model.to(device)
     total_steps = len(train_dataloader) * config["epochs"]
 
     scheduler = BertLRScheduler(
@@ -155,13 +165,17 @@ def train(
         total_acc, total_loss, batch_loss = 0, 0, 0
         with tqdm(train_dataloader, unit="batch") as tepoch:
             for step, batch in enumerate(tepoch):
-                # TODO make this model agnostic
-                b_guids, b_input_ids, b_attn_mask, b_labels = tuple(
+                b_guids, b_inputs, b_attn_mask, b_labels = tuple(
                     t.to(device) for t in batch
                 )
 
                 model.zero_grad()
-                logits = model(b_input_ids, b_attn_mask)
+                logits = model(
+                    inputs=b_inputs,
+                    attention_mask=b_attn_mask,
+                    use_bert_embeddings=use_bert_embeddings,
+                )
+
                 loss = model.compute_loss(logits, b_labels)
                 batch_loss = loss.item()
                 total_loss += batch_loss

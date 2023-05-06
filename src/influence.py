@@ -48,6 +48,7 @@ def get_inverse_hvp_lissa(
     num_samples,
     recursion_depth,
     scale=1e4,
+    use_bert_embeddings=False,
 ):
     ihvp = None
     loss_fn = torch.nn.CrossEntropyLoss()
@@ -66,8 +67,10 @@ def get_inverse_hvp_lissa(
             # segment_ids = segment_ids.to(device)
             label_ids = label_ids.to(device)
             model.zero_grad()
-            # train_loss = model(input_ids, input_mask, label_ids)
-            model_output = model(input_ids, input_mask)
+
+            model_output = model(
+                input_ids, input_mask, use_bert_embeddings=use_bert_embeddings
+            )
             train_loss = loss_fn(model_output, label_ids)
 
             hvp = hv(train_loss, param_influence, cur_estimate)
@@ -96,6 +99,7 @@ def compute_influence(
     train_dataset: Dataset,
     test_dataset: Dataset,
     training_indices=None,
+    use_bert_embeddings=False,
     lissa_r: int = 1,
     lissa_depth: float = 0.25,
     damping=3e-3,
@@ -123,7 +127,9 @@ def compute_influence(
 
         # L_TEST gradient
         full_model.zero_grad()
-        output = full_model(input_ids, input_mask)
+        output = full_model(
+            input_ids, input_mask, use_bert_embeddings=use_bert_embeddings
+        )
         test_loss = full_model.compute_loss(output, label_ids)
         test_grads = autograd.grad(test_loss, param_influence)
 
@@ -143,6 +149,7 @@ def compute_influence(
             scale=scale,
             num_samples=lissa_r,
             recursion_depth=t,
+            use_bert_embeddings=use_bert_embeddings,
         )
 
         for train_guid, train_input_id, train_input_mask, train_label in tqdm(
@@ -153,11 +160,15 @@ def compute_influence(
 
             full_model.train()
             full_model.zero_grad()
-            train_output = full_model(train_input_id, train_input_mask)
+            train_output = full_model(
+                train_input_id,
+                train_input_mask,
+                use_bert_embeddings=use_bert_embeddings,
+            )
             train_loss = full_model.compute_loss(train_output, train_label)
 
             train_grads = autograd.grad(train_loss, param_influence)
-            influences[train_guid] = torch.dot(
+            influences[train_guid] = -torch.dot(
                 inverse_hvp, gather_flat_grad(train_grads)
             ).item()
 
@@ -172,6 +183,7 @@ def compute_input_influence(
     train_dataset: Dataset,
     test_dataset: Dataset,
     training_indices=None,
+    use_bert_embeddings=False,
     lissa_r: int = 1,
     lissa_depth: float = 0.25,
     damping=3e-3,
@@ -185,19 +197,20 @@ def compute_input_influence(
 
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    for guid, input_ids, input_mask, label_ids in test_dataloader:
+    for guid, inputs, input_mask, label_ids in test_dataloader:
         if guid != test_guid:
             continue
 
         full_model.eval()
-
-        input_ids = input_ids.to(device)
-        input_mask = input_mask.to(device)
-        label_ids = label_ids.to(device)
+        inputs, input_mask, label_ids = (
+            inputs.to(device),
+            input_mask.to(device),
+            label_ids.to(device),
+        )
 
         # L_TEST gradient
         full_model.zero_grad()
-        output = full_model(input_ids, input_mask)
+        output = full_model(inputs, input_mask, use_bert_embeddings=use_bert_embeddings)
         test_loss = full_model.compute_loss(output, label_ids)
         test_grads = autograd.grad(test_loss, param_influence)
 
@@ -217,32 +230,46 @@ def compute_input_influence(
             scale=scale,
             num_samples=lissa_r,
             recursion_depth=t,
+            use_bert_embeddings=use_bert_embeddings,
         )
 
         train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=1)
 
-        _, input_id, _, _ = next(iter(train_dataloader))
-        token_embed = full_model.bert.get_input_embeddings().weight[input_id].clone()
+        _, input, _, _ = next(iter(train_dataloader))
+        if use_bert_embeddings:
+            token_embed = input
+        else:
+            token_embed = full_model.bert.get_input_embeddings().weight[input].clone()
+
         num_tokens = token_embed.shape[1]
         embedding_size = token_embed.shape[2]
 
-        influences = np.zeros((len(train_dataset), num_tokens, embedding_size))
-        for train_guid, train_input_id, train_input_mask, train_label in tqdm(
+        # influences = np.zeros((len(train_dataset), num_tokens, embedding_size))
+        influences = {}
+        for train_guid, train_input, train_input_mask, train_label in tqdm(
             train_dataloader
         ):
-            if training_indices is not None and train_guid not in training_indices:
+            if (
+                training_indices is not None
+                and train_guid.item() not in training_indices
+            ):
                 continue
 
             full_model.train()
             full_model.zero_grad()
 
-            token_embeds = (
-                full_model.bert.get_input_embeddings().weight[train_input_id].clone()
-            )
+            if use_bert_embeddings:
+                token_embeds = train_input
+            else:
+                token_embeds = (
+                    full_model.bert.get_input_embeddings().weight[train_input].clone()
+                )
             token_embeds.requires_grad = True
 
             train_output = full_model(
-                inputs_embeds=token_embeds, attention_mask=train_input_mask
+                inputs=token_embeds,
+                attention_mask=train_input_mask,
+                use_bert_embeddings=True,
             )
             loss = full_model.compute_loss(train_output, train_label)
 
@@ -278,7 +305,7 @@ def compute_input_influence(
             #         hessian[i, j] = torch.cat([grad2_x_theta[p_idx].flatten() for p_idx in range(num_params)])
 
             # # Reshape the gradient of the loss with respect to theta into a p by d matrix
-            influences[train_guid] = torch.reshape(
+            influences[train_guid.item()] = -torch.reshape(
                 inverse_hvp @ hessian.view(num_params, -1), (num_tokens, embedding_size)
             ).cpu()
         break

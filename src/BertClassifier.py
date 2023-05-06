@@ -19,9 +19,9 @@ def create_bert_classifier(
     classifier_init_state_path: str = None,
     random_state: int = 42,
 ) -> BertClassifier:
+    # Set seed for reproducibility
     if random_state is not None:
-        utils.set_seed(random_state)  # Set seed for reproducibility
-    device = utils.get_device()
+        utils.set_seed(random_state)
 
     bert_classifier = BertClassifier(
         pretrained_name=bert_pretrained_name,
@@ -36,15 +36,14 @@ def create_bert_classifier(
             torch.load(classifier_init_state_path)
         )
 
-    return bert_classifier.to(device)
+    return bert_classifier
 
 
 class BertClassifier(nn.Module):
-    loss_fn = nn.CrossEntropyLoss()
-
     def __init__(
         self,
         pretrained_name: str = "distilbert-base-uncased",
+        use_bert_embeddings=False,
         freeze_bert=True,
         logistic_hidden_size=20,
         classifier_drop_out: float = 0,
@@ -53,7 +52,9 @@ class BertClassifier(nn.Module):
         super(BertClassifier, self).__init__()
         D_in, H, D_out = 768, logistic_hidden_size, 2
 
+        self.use_bert_embeddings = use_bert_embeddings
         self.bert = AutoModel.from_pretrained(pretrained_name)
+        self.loss_fn = nn.CrossEntropyLoss()
 
         if classifier_type == "single-fc":
             self.classifier = nn.Sequential(
@@ -76,13 +77,11 @@ class BertClassifier(nn.Module):
             for param in self.bert.parameters():
                 param.requires_grad = False
 
-    def forward(self, input_ids=None, attention_mask=None, inputs_embeds=None):
-        if input_ids is None:
-            outputs = self.bert(
-                inputs_embeds=inputs_embeds, attention_mask=attention_mask
-            )
+    def forward(self, inputs, attention_mask, use_bert_embeddings=False):
+        if use_bert_embeddings:
+            outputs = self.bert(inputs_embeds=inputs, attention_mask=attention_mask)
         else:
-            outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+            outputs = self.bert(input_ids=inputs, attention_mask=attention_mask)
 
         last_hidden_state = outputs[0][:, 0, :]
         logits = self.classifier(last_hidden_state)
