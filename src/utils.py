@@ -1,3 +1,4 @@
+import math
 import random
 
 import matplotlib.pyplot as plt
@@ -27,6 +28,11 @@ def load_config(config_path: str, **kwargs):
     config.update(**kwargs)
 
     return config
+
+
+def save_config(config, config_path: str):
+    with open(config_path, "w") as f:
+        yaml.dump(config, f)
 
 
 def evaluate_roc(probs, y_true):
@@ -69,3 +75,22 @@ def get_auc_CV(model, X_train_tfidf, y_train):
     auc = cross_val_score(model, X_train_tfidf, y_train, scoring="roc_auc", cv=kf)
 
     return auc.mean()
+
+
+def split_list(lst, n):
+    """Split a list into n groups.
+
+    Args:
+        lst (list): The list to split.
+        n (int): The number of groups to split the list into.
+
+    Returns:
+        list: A list of n groups, where each group is a list of items from the original list.
+    """
+    # Calculate the size of each group
+    size = math.ceil(len(lst) / n)
+
+    # Split the list into groups
+    groups = [lst[i : i + size] for i in range(0, len(lst), size)]
+
+    return groups

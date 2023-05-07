@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 import src.utils as utils
+import wandb
 
 
 def gather_flat_grad(grads):
@@ -49,6 +50,7 @@ def get_inverse_hvp_lissa(
     recursion_depth,
     scale=1e4,
     use_bert_embeddings=False,
+    wandb_logging=False,
 ):
     ihvp = None
     loss_fn = torch.nn.CrossEntropyLoss()
@@ -78,11 +80,26 @@ def get_inverse_hvp_lissa(
                 _a + (1 - damping) * _b - _c / scale
                 for _a, _b, _c in zip(v, cur_estimate, hvp)
             ]
-            if (j % 200 == 0) or (j == recursion_depth - 1):
-                print(
-                    "Recursion at depth %s: norm is %f"
-                    % (j, np.linalg.norm(gather_flat_grad(cur_estimate).cpu().numpy()))
-                )
+            if (j % 100 == 0) or (j == recursion_depth - 1):
+                if wandb_logging:
+                    wandb.log(
+                        {
+                            "depth": j,
+                            "norm": np.linalg.norm(
+                                gather_flat_grad(cur_estimate).cpu().numpy()
+                            ),
+                        }
+                    )
+                else:
+                    print(
+                        "Recursion at depth %s: norm is %f"
+                        % (
+                            j,
+                            np.linalg.norm(
+                                gather_flat_grad(cur_estimate).cpu().numpy()
+                            ),
+                        )
+                    )
         if ihvp == None:
             ihvp = [_a / scale for _a in cur_estimate]
         else:
@@ -104,8 +121,10 @@ def compute_influence(
     lissa_depth: float = 0.25,
     damping=3e-3,
     scale=1e4,
+    wandb_logging=False,
 ):
     device = utils.get_device()
+    full_model = full_model.to(device)
     influences = np.zeros(len(train_dataset))
     # param_influence = list(full_model.classifier.parameters())
 
@@ -114,6 +133,15 @@ def compute_influence(
     )
     train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=1)
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+
+    t = int(len(train_dataloader) * lissa_depth)
+    if wandb_logging:
+        run = wandb.init(
+            project="influence-compute",
+            config={"lissa_reps": lissa_r, "lissa_iters": t},
+        )
+    else:
+        print(f"LiSSA reps: {lissa_r} and num_iterations: {t}")
 
     for guid, input_ids, input_mask, label_ids in test_dataloader:
         if guid != test_guid:
@@ -136,9 +164,6 @@ def compute_influence(
         # IVHP
         full_model.train()
 
-        t = int(len(train_dataloader) * lissa_depth)
-        print(f"LiSSA reps: {lissa_r} and num_iterations: {t}")
-
         inverse_hvp = get_inverse_hvp_lissa(
             test_grads,
             full_model,
@@ -150,6 +175,7 @@ def compute_influence(
             num_samples=lissa_r,
             recursion_depth=t,
             use_bert_embeddings=use_bert_embeddings,
+            wandb_logging=wandb_logging,
         )
 
         for train_guid, train_input_id, train_input_mask, train_label in tqdm(
@@ -172,7 +198,9 @@ def compute_influence(
                 inverse_hvp, gather_flat_grad(train_grads)
             ).item()
 
-        break
+    if wandb_logging:
+        wandb.finish()
+
     return influences
 
 

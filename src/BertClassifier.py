@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -39,6 +41,22 @@ def create_bert_classifier(
     return bert_classifier
 
 
+def load_model(model_param_path: str):
+    # Drop .pt and add .yaml
+    config_path = model_param_path.rstrip(".pt") + ".yaml"
+    config = utils.load_config(config_path, classifier_init_state_path=model_param_path)
+
+    model = create_bert_classifier(
+        config["bert_model_name"],
+        classifier_type=config["classifier_type"],
+        classifier_hidden_size=config["classifier_hidden_size"],
+        classifier_drop_out=config["classifier_drop_out"],
+        classifier_init_state_path=config["classifier_init_state_path"],
+        freeze_bert=True,
+    )
+    return model, config
+
+
 class BertClassifier(nn.Module):
     def __init__(
         self,
@@ -76,6 +94,17 @@ class BertClassifier(nn.Module):
         if freeze_bert:
             for param in self.bert.parameters():
                 param.requires_grad = False
+
+    def save_model(self, dir: str, config):
+        epoch = config["epochs"]
+        num_training = config["num_training_examples"]
+
+        file_name = f"bert-classifier-epoch{epoch}-{num_training}"
+        torch.save(
+            self.classifier.state_dict(),
+            f"{dir}/{file_name}.pt",
+        )
+        utils.save_config(config, f"{dir}/{file_name}.yaml")
 
     def forward(self, inputs, attention_mask, use_bert_embeddings=False):
         if use_bert_embeddings:
