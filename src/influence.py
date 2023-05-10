@@ -11,6 +11,52 @@ import src.utils as utils
 import wandb
 
 
+def has_converged(values, tolerance=5, min_samples=5):
+    """Determine whether a sequence of values has converged.
+
+    Args:
+        values (list or numpy array): The sequence of values to check for convergence.
+        tolerance (float, optional): The tolerance threshold for the change in the mean and standard deviation. Default is 1e-6.
+        min_samples (int, optional): The minimum number of samples to use when computing the mean and standard deviation. Default is 10.
+
+    Returns:
+        bool: True if the sequence of values has converged, False otherwise.
+    """
+    # Convert the input to a numpy array
+    values = np.array(values)
+
+    # Check if there are enough samples to compute the mean and standard deviation
+    if len(values) < min_samples:
+        return False
+
+    # Compute the running mean and standard deviation of the sequence
+    mean = values.mean()
+    std = values.std()
+
+    # Track the previous mean and standard deviation
+    prev_mean = mean
+    prev_std = std
+
+    # Iterate until the mean and standard deviation have converged
+    while True:
+        # Compute the new mean and standard deviation
+        mean = values.mean()
+        std = values.std()
+
+        # Check if the change in the mean and standard deviation is within the tolerance threshold
+        if abs(mean - prev_mean) < tolerance and abs(std - prev_std) < tolerance:
+            return True
+
+        # Update the previous mean and standard deviation
+        prev_mean = mean
+        prev_std = std
+
+        # Remove the oldest value from the sequence and try again
+        values = values[1:]
+        if len(values) < min_samples:
+            return False
+
+
 def gather_flat_grad(grads):
     views = []
     for p in grads:
@@ -58,6 +104,8 @@ def get_inverse_hvp_lissa(
     for i in range(num_samples):
         cur_estimate = v
         lissa_data_iterator = iter(train_loader)
+        norm_list = []
+
         for j in range(recursion_depth):
             try:
                 guids, input_ids, input_mask, label_ids = next(lissa_data_iterator)
@@ -81,13 +129,15 @@ def get_inverse_hvp_lissa(
                 for _a, _b, _c in zip(v, cur_estimate, hvp)
             ]
             if (j % 100 == 0) or (j == recursion_depth - 1):
+                estimate_norm = np.linalg.norm(
+                    gather_flat_grad(cur_estimate).cpu().numpy()
+                )
+                norm_list.append(estimate_norm)
                 if wandb_logging:
                     wandb.log(
                         {
                             "depth": j,
-                            "norm": np.linalg.norm(
-                                gather_flat_grad(cur_estimate).cpu().numpy()
-                            ),
+                            "norm": estimate_norm,
                         }
                     )
                 else:
@@ -95,11 +145,11 @@ def get_inverse_hvp_lissa(
                         "Recursion at depth %s: norm is %f"
                         % (
                             j,
-                            np.linalg.norm(
-                                gather_flat_grad(cur_estimate).cpu().numpy()
-                            ),
+                            estimate_norm,
                         )
                     )
+
+        # conv = has_converged(norm_list)
         if ihvp == None:
             ihvp = [_a / scale for _a in cur_estimate]
         else:
@@ -129,7 +179,7 @@ def compute_influence(
     # param_influence = list(full_model.classifier.parameters())
 
     train_dataloader_lissa = DataLoader(
-        train_dataset, batch_size=16, shuffle=True, drop_last=True
+        train_dataset, batch_size=32, shuffle=True, drop_last=True
     )
     train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=1)
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
@@ -220,7 +270,7 @@ def compute_input_influence(
     device = utils.get_device()
 
     train_dataloader_lissa = DataLoader(
-        train_dataset, batch_size=16, shuffle=True, drop_last=True
+        train_dataset, batch_size=32, shuffle=True, drop_last=True
     )
 
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)

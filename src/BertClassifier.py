@@ -41,10 +41,12 @@ def create_bert_classifier(
     return bert_classifier
 
 
-def load_model(model_param_path: str):
+def load_model(config_param_path: str, config_overrides=None):
     # Drop .pt and add .yaml
-    config_path = model_param_path.rstrip(".pt") + ".yaml"
-    config = utils.load_config(config_path, classifier_init_state_path=model_param_path)
+    # config_path = model_param_path.rstrip(".pt") + ".yaml"
+    config = utils.load_config(config_param_path)
+    if config_overrides is not None:
+        config.update(config_overrides)
 
     model = create_bert_classifier(
         config["bert_model_name"],
@@ -98,13 +100,20 @@ class BertClassifier(nn.Module):
     def save_model(self, dir: str, config):
         epoch = config["epochs"]
         num_training = config["num_training_examples"]
+        optimizer_weight_decay = config["optimizer_weight_decay"]
 
-        file_name = f"bert-classifier-epoch{epoch}-{num_training}"
+        file_name = f"bert-epoch{epoch}-reg{optimizer_weight_decay}-{num_training}"
+        pt_path = f"{dir}/{file_name}.pt"
+        config_path = f"{dir}/{file_name}.yaml"
+
         torch.save(
             self.classifier.state_dict(),
-            f"{dir}/{file_name}.pt",
+            pt_path,
         )
-        utils.save_config(config, f"{dir}/{file_name}.yaml")
+        config.update({"classifier_init_state_path": pt_path})
+
+        sorted_config = dict(sorted(config.items()))
+        utils.save_config(sorted_config, config_path)
 
     def forward(self, inputs, attention_mask, use_bert_embeddings=False):
         if use_bert_embeddings:

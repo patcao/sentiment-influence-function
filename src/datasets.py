@@ -49,6 +49,10 @@ def get_test_example(guid: int):
     return test_df[test_df.guid == guid]
 
 
+def get_sentences(guids: List[int]):
+    return {guid: get_test_example(guid).sentence.squeeze() for guid in guids}
+
+
 def get_tokens_from_ids(input_ids, bert_name: str = "distilbert-base-uncased"):
     tokenizer = AutoTokenizer.from_pretrained(bert_name, do_lower_case=True)
 

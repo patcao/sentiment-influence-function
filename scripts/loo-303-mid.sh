@@ -1,0 +1,1 @@
+python scripts/loo_top_influence.py --output-dir results_10k_reg001/loo --config-path model_params/bert-epoch30-reg0.001-10000.yaml --influence-dir results_10k_reg001/influence --test-guid 303 --num-influence-points 10000 --num-workers 50 --worker-id 25
