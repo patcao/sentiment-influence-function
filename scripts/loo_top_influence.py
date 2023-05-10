@@ -53,6 +53,47 @@ def pick_very_tenth_influence_guids(args):
     return loo_indxs
 
 
+def do_loo_and_save(
+    config_path, output_dir, train_dataset, test_dataset, config, loo_guid
+):
+    # Create train dataset
+    loo_dataset = create_loo_dataset(train_dataset, loo_guid)
+    loo_dataloader = DataLoader(
+        loo_dataset, batch_size=config["batch_size"], shuffle=True
+    )
+    test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=1)
+
+    loo_model, _ = BertClassifier.load_model(config_path)
+
+    if "optimizer_weight_decay" in config:
+        optimizer = Adam(
+            loo_model.classifier.parameters(),
+            lr=config["learning_rate"],
+            weight_decay=config["optimizer_weight_decay"],
+        )
+    else:
+        optimizer = Adam(loo_model.classifier.parameters(), lr=config["learning_rate"])
+
+    run = wandb.init(project="Bert-LOO", config=config)
+    train_utils.train(
+        config=config,
+        model=loo_model,
+        optimizer=optimizer,
+        train_dataloader=loo_dataloader,
+        val_dataloader=test_dataloader,
+    )
+
+    ldf, test_loss, test_acc = train_utils.evaluate_loss(loo_model, test_dataloader)
+
+    wandb.summary["test/loss"] = test_loss
+    wandb.summary["test/accuracy"] = test_acc
+    wandb.finish()
+
+    ldf["loo_guid"] = loo_guid
+    torch.save(loo_model.classifier.state_dict(), output_dir / "trained.pt")
+    ldf.to_csv(output_dir / "test_loss.csv", index=False)
+
+
 def main(args):
     base_output_dir = Path(args.output_dir) / f"test-guid-{args.test_guid}"
     os.makedirs(base_output_dir, exist_ok=True)
@@ -74,7 +115,7 @@ def main(args):
         # work_split=",".join(str_work_split),
     )
     retrain_config = config.copy()
-    retrain_config.update(epochs=args.epochs)
+    retrain_config.update(epochs=args.epochs, learning_rate=0.0001)
 
     utils.save_config(retrain_config, f"{base_output_dir}/worker-{worker_id}.yaml")
 
@@ -100,44 +141,14 @@ def main(args):
         output_dir = base_output_dir / f"run_{loo_guid}"
         os.makedirs(output_dir, exist_ok=True)
 
-        # Create train dataset
-        loo_dataset = create_loo_dataset(train_dataset, loo_guid)
-        loo_dataloader = DataLoader(
-            loo_dataset, batch_size=config["batch_size"], shuffle=True
-        )
-        test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=1)
-
-        loo_model = copy.deepcopy(og_model)
-
-        if "optimizer_weight_decay" in config:
-            optimizer = Adam(
-                loo_model.classifier.parameters(),
-                lr=config["learning_rate"],
-                weight_decay=config["optimizer_weight_decay"],
-            )
-        else:
-            optimizer = Adam(
-                loo_model.classifier.parameters(), lr=config["learning_rate"]
-            )
-
-        run = wandb.init(project="Bert-LOO", config=retrain_config)
-        train_utils.train(
+        do_loo_and_save(
+            config_path=args.config_path,
+            output_dir=output_dir,
+            train_dataset=train_dataset,
+            test_dataset=test_dataset,
             config=retrain_config,
-            model=loo_model,
-            optimizer=optimizer,
-            train_dataloader=loo_dataloader,
-            val_dataloader=test_dataloader,
+            loo_guid=loo_guid,
         )
-
-        ldf, test_loss, test_acc = train_utils.evaluate_loss(loo_model, test_dataloader)
-
-        wandb.summary["test/loss"] = test_loss
-        wandb.summary["test/accuracy"] = test_acc
-        wandb.finish()
-
-        ldf["loo_guid"] = loo_guid
-        torch.save(loo_model.classifier.state_dict(), output_dir / "trained.pt")
-        ldf.to_csv(output_dir / "test_loss.csv", index=False)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from src import train_utils, utils
 from src.datasets import create_loo_dataset, create_test_sst2, create_train_sst2
 import random
 
-LISSA_DEPTH = 0.3
+LISSA_DEPTH = 0.15
 DAMPING_TERM = 5e-3
 
 

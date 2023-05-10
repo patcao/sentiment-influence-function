@@ -8,62 +8,30 @@ from tqdm import tqdm
 import src.BertClassifier as BertClassifier
 import src.utils as utils
 import wandb
-from src.datasets import create_test_sst2, create_train_sst2
-
+from src import train_utils
+from src import datasets as data_utils
 
 def main_train_loop():
     config = wandb.config
     device = utils.get_device()
 
     # Create datasets
-    train_dataset = create_train_sst2(
-        device,
-        num_samples=config.num_training_examples,
-        tokenizer_name=config.bert_model_name,
-        max_seq_len=config.max_sequence_length,
-    )
-    train_dataloader = DataLoader(
-        train_dataset, batch_size=config.batch_size, shuffle=True
+    train_dataset = data_utils.create_train_sst2(
+        device=device,
+        num_samples=config["num_training_examples"],
+        tokenizer_name=config["bert_model_name"],
+        max_seq_len=config["max_sequence_length"],
     )
 
-    test_dataset = create_test_sst2(
-        device,
-        tokenizer_name=config.bert_model_name,
-        max_seq_len=config.max_sequence_length,
-    )
-    test_dataloader = DataLoader(test_dataset, shuffle=False)
-
-    print(f"Train: {len(train_dataloader)*config.batch_size}")
-    print(f"Test: {len(test_dataloader)}")
-
-    # Create classifcation model
-    model = BertClassifier.create_bert_classifier(
-        config.bert_model_name,
-        classifier_type=config.classifier_type,
-        classifier_hidden_size=config.classifier_hidden_size,
-        classifier_drop_out=config.classifier_drop_out,
-        freeze_bert=True,
-        random_state=42,
+    test_dataset = data_utils.create_test_sst2(
+        device=device,
+        tokenizer_name=config["bert_model_name"],
+        max_seq_len=config["max_sequence_length"],
     )
 
-    # Do training
-    optimizer = Adam(model.classifier.parameters(), lr=config.learning_rate)
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    timings = utils.train(
-        config=config,
-        model=model,
-        optimizer=optimizer,
-        loss_fn=loss_fn,
-        train_dataloader=train_dataloader,
-        val_dataloader=None,
+    train_utils.train_bert_model(
+        train_dataset, test_dataset, config, validation_dataset=test_dataset
     )
-
-    test_loss, test_acc = utils.evaluate(model, test_dataloader)
-    wandb.summary["test/loss"] = test_loss
-    wandb.summary["test/accuracy"] = test_acc
-
-    wandb.finish()
 
 
 run = wandb.init()
