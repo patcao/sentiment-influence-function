@@ -13,12 +13,13 @@ from src import influence as inf_utils
 from src import train_utils, utils
 from src.datasets import create_loo_dataset, create_test_sst2, create_train_sst2
 import random
+import pickle
 
 LISSA_DEPTH = 0.15
 DAMPING_TERM = 5e-3
 
 
-def compute_and_save_influence(test_guid: int, config_path: str):
+def compute_and_save_influence(test_guid: int, config_path: str, output_dir: str):
     cuda_device = utils.get_device()
     model, config = BertClassifier.load_model(config_path)
 
@@ -53,20 +54,31 @@ def compute_and_save_influence(test_guid: int, config_path: str):
     df = pd.DataFrame(data=infl, index=range(len(infl)), columns=["influence"])
     df = df.rename_axis("train_guid").reset_index()
     df["test_guid"] = test_guid
-    df.to_csv(f"{args.output_dir}/influence-testguid-{test_guid}.csv", index=False)
+    df.to_csv(f"{output_dir}/influence-testguid-{test_guid}.csv", index=False)
 
 
 def main(args):
+    handler = utils.GracefulInterruptHandler()
+
     worker_id = args.worker_id
 
     exclude_guids = [218, 303, 862]  # , 862, 292, 112, 315, 334, 651, 443, 303]
-    all_test_guids = list(set(range(872)) - set(exclude_guids))
-    all_test_guids = random.Random(42).shuffle(all_test_guids)
+    #all_test_guids = list(set(range(872)) - set(exclude_guids))
+    # all_test_guids = list(range(872))
+    # # all_test_guids = [586, 58, 93, 346, 420, 699]
+    # random.Random(42).shuffle(all_test_guids)
 
-    work_split = utils.split_list(all_test_guids, args.num_workers)
+    with open('test_guid_order_if.pkl', 'rb') as f:
+        test_guid_order = pickle.load(f)
+
+    work_split = utils.split_list(test_guid_order, args.num_workers)
 
     for test_guid in work_split[worker_id - 1]:
-        compute_and_save_influence(test_guid, args.config_path)
+        if os.path.exists(f"{args.output_dir}/influence-testguid-{test_guid}.csv"):
+            continue
+        if handler():
+            break
+        compute_and_save_influence(test_guid, args.config_path, args.output_dir)
 
 
 if __name__ == "__main__":

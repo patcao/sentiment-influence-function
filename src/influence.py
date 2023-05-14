@@ -6,10 +6,35 @@ import torch.autograd as autograd
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-
+from pathlib import Path
+import pandas as pd
+import numpy as np
 import src.utils as utils
 import wandb
 
+def load_influence(results_dir: Path, test_guid: int, num_training_points: int):
+    # -- Load Influence Results --
+    infl_dir = results_dir / "influence"
+    infl = pd.read_csv(infl_dir / f"influence-testguid-{test_guid}.csv")
+    infl["infl_diff"] = (-100.0 / num_training_points) * infl["influence"]
+    infl["abs_infl"] = np.abs(infl["infl_diff"])
+    return infl
+    
+def load_all_influences(results_dir: Path, num_training_points: int):
+    influences = []
+    no_data = []
+    
+    for item in  (results_dir / "influence").iterdir():
+        if item.is_file():
+            try:
+                infl = pd.read_csv(item)
+                infl["infl_diff"] = (-100.0 / num_training_points) * infl["influence"]
+                infl["abs_infl"] = np.abs(infl["infl_diff"])
+                influences.append(infl)
+            except:
+                no_data.append(item)
+    return pd.concat(influences), no_data
+    
 
 def has_converged(values, tolerance=5, min_samples=5):
     """Determine whether a sequence of values has converged.
@@ -188,7 +213,7 @@ def compute_influence(
     if wandb_logging:
         run = wandb.init(
             project="influence-compute",
-            config={"lissa_reps": lissa_r, "lissa_iters": t},
+            config={"test_guid": test_guid, "lissa_reps": lissa_r, "lissa_iters": t},
         )
     else:
         print(f"LiSSA reps: {lissa_r} and num_iterations: {t}")

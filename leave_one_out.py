@@ -10,42 +10,49 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import src.BertClassifier as BertClassifier
-import src.utils as utils
 import wandb
-from src.datasets import (create_loo_dataset, create_test_sst2,
-                          create_train_sst2)
+from src import BertClassifier, train_utils, utils
+from src.datasets import create_loo_dataset, create_test_sst2, create_train_sst2
+
+"""Performs Leave One Out retraining. This retrains each model from the start for every LOO"""
 
 
 def main(args):
     device = utils.get_device()
 
-    with open(args.config_path, "r") as stream:
-        config = yaml.safe_load(stream)
-    config.update(
-        {"epochs": args.epochs, "num_training_examples": args.num_training_examples}
-    )
+    config = utils.load_config(args.config_path)
+    if args.epochs:
+        config["epochs"] = args.epochs
+    if args.num_training_examples:
+        config["num_training_examples"] = args.num_training_examples
+
+    worker_id = args.worker_id
+    all_loo_guids = list(range(config["num_training_examples"]))
+    work_split = utils.split_list(all_loo_guids, args.num_workers)
+    work_split = work_split[worker_id - 1]
+
+    str_work_split = [str(val) for val in work_split]
+    config.update(worker_id=worker_id, work_split=','.join(str_work_split))
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    utils.save_config(config, f"{args.output_dir}/worker-{worker_id}.yaml")
 
     # Create datasets
     train_dataset = create_train_sst2(
-        device,
+        device=device,
         num_samples=config["num_training_examples"],
         tokenizer_name=config["bert_model_name"],
         max_seq_len=config["max_sequence_length"],
     )
 
     test_dataset = create_test_sst2(
-        device,
+        device=device,
         tokenizer_name=config["bert_model_name"],
         max_seq_len=config["max_sequence_length"],
     )
-    test_dataloader = DataLoader(test_dataset, shuffle=False)
 
-    # print(f"Train: {len(train_dataloader)*config['batch_size']}")
-    # print(f"Test: {len(test_dataloader)}")
-    for loo_guid in range(args.loo_guid_start, args.loo_guid_end):
+    for loo_guid in work_split:
         config["loo_guid"] = loo_guid
-        run = wandb.init(project="LOO-10k-BertClassifier2", config=config)
 
         # Create LOO directory
         output_dir = Path(args.output_dir) / f"run_{loo_guid}"
@@ -53,49 +60,15 @@ def main(args):
 
         # Create train dataset
         loo_dataset = create_loo_dataset(train_dataset, loo_guid)
-        train_dataloader = DataLoader(
-            loo_dataset, batch_size=config["batch_size"], shuffle=True
-        )
 
-        # Create classifcation model
-        model = BertClassifier.create_bert_classifier(
-            config["bert_model_name"],
-            classifier_type=config["classifier_type"],
-            classifier_hidden_size=config["classifier_hidden_size"],
-            classifier_drop_out=config["classifier_drop_out"],
-            freeze_bert=True,
-            random_state=None
-            # random_state=42,
-        )
-        model.classifier.load_state_dict(
-            torch.load("loo_10k_10ep_2/init_classifier_params.pt")
-        )
-        # torch.save(
-        #     model.classifier.state_dict(), output_dir / "init_classifier_params.pt"
-        # )
-
-        # Do training
-        optimizer = Adam(model.classifier.parameters(), lr=config["learning_rate"])
-        loss_fn = torch.nn.CrossEntropyLoss()
-
-        timings = utils.train(
+        model, df, test_loss, test_acc = train_utils.train_bert_model(
+            train_dataset=loo_dataset,
+            test_dataset=test_dataset,
             config=config,
-            model=model,
-            optimizer=optimizer,
-            loss_fn=loss_fn,
-            train_dataloader=train_dataloader,
-            val_dataloader=None,
+            wandb_project="LOO-Bert",
         )
 
-        df, test_loss, test_acc = utils.evaluate_loss_df(model, test_dataloader)
-        wandb.summary["test/loss"] = test_loss
-        wandb.summary["test/accuracy"] = test_acc
-
-        wandb.finish()
-
-        torch.save(
-            model.classifier.state_dict(), output_dir / "trained_classifier_params.pt"
-        )
+        torch.save(model.classifier.state_dict(), output_dir / "trained.pt")
         df.to_csv(output_dir / "test_loss.csv", index=False)
 
 
@@ -111,14 +84,13 @@ if __name__ == "__main__":
         "--config-path", type=str, help="Path to the hyperparameter config YAML file"
     )
     parser.add_argument(
-        "--loo-guid-start",
-        type=int,
-        help="GUID of the first training example to leave out, inclusive",
+        "--worker-id", type=int, help="ID of this worker. Starts at 1", default=1
     )
     parser.add_argument(
-        "--loo-guid-end",
+        "--num-workers",
         type=int,
         help="GUID of the last training example to leave out, exclusive",
+        default=1,
     )
     parser.add_argument(
         "--num-training-examples", type=int, help="Number of training examples to use"

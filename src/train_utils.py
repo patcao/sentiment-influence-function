@@ -43,7 +43,9 @@ def evaluate_loss(model, dataloader, use_bert_embeddings=False):
         loss = model.compute_loss(logits, b_labels)
 
         # Get the predictions
-        pred = torch.argmax(logits, dim=1).flatten()
+        # pred = torch.argmax(logits, dim=1).flatten()
+        probs = torch.softmax(logits, dim=1)
+        pred = torch.argmax(probs, dim=1)
 
         # Calculate the accuracy rate
         accuracy = (pred == b_labels).cpu().numpy().mean() * 100
@@ -219,12 +221,16 @@ def train(
     model = model.to(device)
     total_steps = len(train_dataloader) * config["epochs"]
 
+    # config["lr_warmup_pct"]
+    # lr_warmuppct = 0.1
     # scheduler = BertLRScheduler(
     #     optimizer,
-    #     warmup_steps=config["lr_warmup_pct"] * total_steps,
+    #     warmup_steps=lr_warmuppct * total_steps,
     #     total_steps=total_steps,
-    #     end_lr=1e-6,
+    #     end_lr=1e-7,
     # )
+
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
 
     for epoch_i in range(1, config["epochs"] + 1):
         model.train()
@@ -256,8 +262,11 @@ def train(
 
                 # Update parameters and the learning rate
                 optimizer.step()
-                # scheduler.step()
+                
+
+                # lr = optimizer.param_groups[0]["lr"]
                 wandb.log({"train/batch_loss": batch_loss / len(batch)})
+            # scheduler.step()
 
         # Calculate the average loss over the entire training data
         num_batches = len(train_dataloader)

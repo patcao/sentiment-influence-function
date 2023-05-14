@@ -48,6 +48,8 @@ def get_test_example(guid: int):
     test_df = get_test_df()
     return test_df[test_df.guid == guid]
 
+def get_train_sentences(guids: List[int]):
+    return {guid: get_train_example(guid).sentence.squeeze() for guid in guids}
 
 def get_sentences(guids: List[int]):
     return {guid: get_test_example(guid).sentence.squeeze() for guid in guids}

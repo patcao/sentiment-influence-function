@@ -9,6 +9,19 @@ import yaml
 from sklearn.metrics import accuracy_score, auc, roc_curve
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 
+import signal
+
+class GracefulInterruptHandler(object):
+    def __init__(self):
+        self.sigint = False
+        signal.signal(signal.SIGINT, self.handle_signal)
+
+    def handle_signal(self, signal, frame):
+        print('SIGINT received. Waiting for current loop to finish...')
+        self.sigint = True
+
+    def __call__(self):
+        return self.sigint
 
 def set_seed(seed_value=42):
     """Set seed for reproducibility."""

@@ -100,9 +100,14 @@ def main(args):
 
     device = utils.get_device()
     # Load model and config
-    og_model, config = BertClassifier.load_model(args.config_path)
-
+    # _, config = BertClassifier.load_model(args.config_path)
+    config = utils.load_config(args.config_path)
+    
     loo_indxs = pick_top_influence_guids(args)
+    l = loo_indxs[2:]
+    l.reverse()
+    l = [761, 7127] + l
+
     # loo_indxs = pick_very_tenth_influence_guids(args)
     worker_id = args.worker_id
     work_split = utils.split_list(loo_indxs, args.num_workers)
@@ -115,7 +120,10 @@ def main(args):
         # work_split=",".join(str_work_split),
     )
     retrain_config = config.copy()
-    retrain_config.update(epochs=args.epochs, learning_rate=0.0001)
+    if args.learning_rate is not None:
+        retrain_config.update(epochs=args.epochs, learning_rate=args.learning_rate)
+    else:
+        retrain_config.update(epochs=args.epochs, learning_rate=0.0001)
 
     utils.save_config(retrain_config, f"{base_output_dir}/worker-{worker_id}.yaml")
 
@@ -179,6 +187,12 @@ if __name__ == "__main__":
         type=int,
         help="Number of epochs to retrain the LOO models for",
         default=3,
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        help="Learning rate to user when retraining",
+        default = None,
     )
     parser.add_argument(
         "--worker-id", type=int, help="ID of this worker. Starts at 1", default=1
